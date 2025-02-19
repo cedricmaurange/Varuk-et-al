@@ -1,0 +1,224 @@
+---
+title: "Varuk et al. code"
+author: "Paul DE BOISSIER"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+header-includes: \usepackage{color}
+---
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=T}
+# Loading libraries
+gc()
+library(ape)
+library(SPARTAAS)
+library(ggplot2)
+library("FactoMineR")
+library("factoextra")
+library("corrplot")
+library(vcd)
+```
+
+# Matrix of mean distance of the presence/absence of the five types of mithochondrion combined with the three over characters
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=T}
+set.seed(124)
+
+# load binary matrix (0 for absence, 1 for presence)
+binary_matrix <- read.table("~/mito_morpho_correct.csv", header = T, sep = ";")
+
+# add labels based on three main columns
+binary_matrix$sample_labels <- paste(binary_matrix$Mutation,binary_matrix$Sample,binary_matrix$Cell,sep = "_")
+sample_labels <- binary_matrix$sample_labels
+rownames(binary_matrix) <- binary_matrix$sample_labels
+binary_matrix.short <- as.matrix(binary_matrix[,c(4:8)])
+
+# calculate binaty distance between each samples
+dist_matrix <- dist(binary_matrix.short, method = "binary")
+dist_matrix_full <- as.matrix(dist_matrix)
+
+# create an empty matrix to store the mean distances based on Mutation column
+sample_names <- attr(dist_matrix, "Labels")
+groupes <- gsub("_.*", "", sample_names)
+group_names <- unique(groupes)
+mean_distances <- matrix(0, nrow = length(group_names), ncol = length(group_names))
+rownames(mean_distances) <- group_names
+colnames(mean_distances) <- group_names
+
+# Calculate mean distance between each Mutation
+for (i in 1:length(group_names)) {
+  for (j in 1:length(group_names)) {
+    if (i != j) {
+      samples_i <- sample_names[groupes == group_names[i]]
+      samples_j <- sample_names[groupes == group_names[j]]
+      distances <- dist_matrix_full[samples_i, samples_j, drop = FALSE]
+      mean_distances[i, j] <- mean(distances, na.rm = TRUE)
+    }
+  }
+}
+
+# convert as distance matrix
+mean_distances_dist <- as.dist(mean_distances)
+
+# load non binary data
+non.binary_matrix <- read.table("~/mito_morpho_with_KO.csv", header = T, sep = ";")[,c(1,7:9)]
+rownames(non.binary_matrix) <- non.binary_matrix$mutation
+non.binary_matrix.short <- non.binary_matrix[,c(2:4)]
+# calculate distances between each mutations
+dist_matrix.non.binary <- dist(non.binary_matrix.short, method = "euclidean")
+
+# calculate hierarchical clustering with ward.D, putting the two matrices together
+# and letting the tool calculate their weights automatically
+hc.list <- hclustcompro(D1 = mean_distances_dist, D2 = dist_matrix.non.binary,k=6, method = "ward.D")
+
+# save the hierarchical clustering as newick file
+my_tree <- as.phylo(hc.list$tree) 
+write.tree(phy=my_tree, file="mito_morpho_with_KO_ward.D_auto.newick") 
+```
+
+# Kendall correlation coefficient for quantitative data
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=T}
+# load data and format them
+set.seed(124)
+famd.data <- read.table("mito_quant_qual_variables.csv", header = T, sep = "\t", row.names = 1)
+famd.data <- famd.data[c(2:15),]
+quant_vars <- which(sapply(famd.data, is.numeric))
+famd.data_quant <- famd.data[, quant_vars][,c(1:14)]
+colnames(famd.data_quant) <- c("Locomotion","% Fragmented WT","% Clustered WT","% Tubular WT","% Net-like WT","% Enlarged WT","Fusion activity","% Fragmented KO","% Tubular KO","Distribution Mito","NMJ Mito","ER Mito","Ubi Native","Total Native")
+famd.data_quant <- famd.data_quant[,c("Locomotion","Distribution Mito","ER Mito","NMJ Mito","% Fragmented WT","% Clustered WT","% Tubular WT","% Net-like WT","% Enlarged WT","Fusion activity","% Fragmented KO","% Tubular KO","Ubi Native","Total Native")]
+
+# calculate Kendall correlation between each variable
+famd.corr <- cor(famd.data_quant,method = "kendall")
+
+# Plot the correlations in different ways 
+## plot tau values
+corrplot(famd.corr,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall Tau",addCoef.col = "black",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+## plot ellipses
+corrplot(famd.corr,type = "upper",order="original", method = "ellipse",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall ellipses",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+
+# create an empry matrix to store pvalues
+pvalue_matrix <- matrix(NA, ncol = ncol(famd.data_quant), nrow = ncol(famd.data_quant))
+rownames(pvalue_matrix) <- colnames(famd.data_quant)
+colnames(pvalue_matrix) <- colnames(famd.data_quant)
+
+# calculate p-values for between each variable
+for (i in 1:ncol(famd.data_quant)) {
+    for (j in i:ncol(famd.data_quant)) {
+        if (i == j) {
+            pvalue_matrix[i, j] <- 1
+        } else {
+            pvalue_matrix[i, j] <- cor.test(famd.data_quant[, i], famd.data_quant[, j],method = "kendall")$p.value	
+            pvalue_matrix[j, i] <- pvalue_matrix[i, j]  # Symétrie de la matrice
+        }
+    }
+}
+
+# plot the pvalues the same way the correlations are plotted, setting color code according to their values
+corrplot(pvalue_matrix,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,addCoef.col = "black",mar = c(0,0,1,0),is.corr = F,col.lim=c(0,1), col = c("darkred",rep("red", 9),rep("indianred1", 40),rep("royalblue1", 950)), number.digits = 5, number.cex = 0.8,title = "Correlation plot - Kendall p-values",cl.pos = 'n',outline = "grey")
+
+# plotting the pvalues plot legends as corrplot is not doing it well.....
+plot(1, type = "n", xlab = "", ylab = "", xlim = c(0, 5), ylim = c(0, 5), axes = FALSE)
+rect(0.5, 4, 1, 4.5, col = "darkred", border = "black")
+rect(0.5, 3, 1, 3.5, col = "red", border = "black")
+rect(0.5, 2, 1, 2.5, col = "indianred1", border = "black")
+rect(0.5, 1, 1, 1.5, col = "royalblue1", border = "black")
+text(1.5, 4.25, "p < 0.001", cex = 1.2)
+text(1.75, 3.25, "0.001 < p < 0.01", cex = 1.2)
+text(1.75, 2.25, "0.01 < p < 0.05", cex = 1.2)
+text(1.5, 1.25, "p > 0.05", cex = 1.2)
+
+```
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=FALSE}
+set.seed(124)
+famd.data_quant.2 <- famd.data_quant[,c(1:4,10:14)]
+
+famd.corr <- cor(famd.data_quant.2,method = "kendall")
+
+corrplot(famd.corr,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall Tau",addCoef.col = "black",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+corrplot(famd.corr,type = "upper",order="original", method = "ellipse",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall ellipses",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+
+pvalue_matrix <- matrix(NA, ncol = ncol(famd.data_quant.2), nrow = ncol(famd.data_quant.2))
+rownames(pvalue_matrix) <- colnames(famd.data_quant.2)
+colnames(pvalue_matrix) <- colnames(famd.data_quant.2)
+
+for (i in 1:ncol(famd.data_quant.2)) {
+    for (j in i:ncol(famd.data_quant.2)) {
+        if (i == j) {
+            pvalue_matrix[i, j] <- 1
+        } else {
+            pvalue_matrix[i, j] <- cor.test(famd.data_quant.2[, i], famd.data_quant.2[, j],method = "kendall")$p.value	
+            pvalue_matrix[j, i] <- pvalue_matrix[i, j]  # Symétrie de la matrice
+        }
+    }
+}
+
+corrplot(pvalue_matrix,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,addCoef.col = "black",mar = c(0,0,1,0),is.corr = F,col.lim=c(0,1), col = c("darkred",rep("red", 9),rep("indianred1", 40),rep("royalblue1", 950)), number.digits = 5, number.cex = 0.8,title = "Correlation plot - Kendall p-values",cl.pos = 'n')
+
+
+```
+
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=FALSE}
+set.seed(124)
+famd.data_quant.2 <- famd.data_quant[,c(1:4)]
+
+famd.corr <- cor(famd.data_quant.2,method = "kendall")
+
+corrplot(famd.corr,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall Tau",addCoef.col = "black",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+corrplot(famd.corr,type = "upper",order="original", method = "ellipse",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall ellipses",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+
+pvalue_matrix <- matrix(NA, ncol = ncol(famd.data_quant.2), nrow = ncol(famd.data_quant.2))
+rownames(pvalue_matrix) <- colnames(famd.data_quant.2)
+colnames(pvalue_matrix) <- colnames(famd.data_quant.2)
+
+for (i in 1:ncol(famd.data_quant.2)) {
+    for (j in i:ncol(famd.data_quant.2)) {
+        if (i == j) {
+            pvalue_matrix[i, j] <- 1
+        } else {
+            pvalue_matrix[i, j] <- cor.test(famd.data_quant.2[, i], famd.data_quant.2[, j],method = "kendall")$p.value	
+            pvalue_matrix[j, i] <- pvalue_matrix[i, j]  # Symétrie de la matrice
+        }
+    }
+}
+
+corrplot(pvalue_matrix,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,addCoef.col = "black",mar = c(0,0,1,0),is.corr = F,col.lim=c(0,1), col = c("darkred",rep("red", 9),rep("indianred1", 40),rep("royalblue1", 950)), number.digits = 5, number.cex = 1,title = "Correlation plot - Kendall p-values",cl.pos = 'n')
+
+
+```
+
+
+```{r,warning=FALSE,message=FALSE,error=TRUE,echo=FALSE}
+set.seed(124)
+famd.data_quant.2 <- famd.data_quant[,c(10:14)]
+
+famd.corr <- cor(famd.data_quant.2,method = "kendall")
+
+corrplot(famd.corr,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall Tau",addCoef.col = "black",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+corrplot(famd.corr,type = "upper",order="original", method = "ellipse",tl.col="black",tl.srt = 45,title = "Correlation plot - Kendall ellipses",mar = c(0,0,1,0), col = COL2('PRGn', 200))
+
+pvalue_matrix <- matrix(NA, ncol = ncol(famd.data_quant.2), nrow = ncol(famd.data_quant.2))
+rownames(pvalue_matrix) <- colnames(famd.data_quant.2)
+colnames(pvalue_matrix) <- colnames(famd.data_quant.2)
+
+for (i in 1:ncol(famd.data_quant.2)) {
+    for (j in i:ncol(famd.data_quant.2)) {
+        if (i == j) {
+            pvalue_matrix[i, j] <- 1
+        } else {
+            pvalue_matrix[i, j] <- cor.test(famd.data_quant.2[, i], famd.data_quant.2[, j],method = "kendall")$p.value	
+            pvalue_matrix[j, i] <- pvalue_matrix[i, j]  # Symétrie de la matrice
+        }
+    }
+}
+
+corrplot(pvalue_matrix,type = "upper",order="original", method = "color",tl.col="black",tl.srt = 45,addCoef.col = "black",mar = c(0,0,1,0),is.corr = F,col.lim=c(0,1), col = c("darkred",rep("red", 9),rep("indianred1", 40),rep("royalblue1", 950)), number.digits = 5, number.cex = 1,title = "Correlation plot - Kendall p-values",cl.pos = 'n')
+
+```
